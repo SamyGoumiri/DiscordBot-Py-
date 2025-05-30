@@ -116,3 +116,15 @@ class XPDatabase:
     async def import_db(self, import_path: str):
         import shutil
         shutil.copyfile(import_path, self.db_path)
+
+    async def set_cooldown(self, guild_id: str, value: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''INSERT INTO config (guild_id, cooldown) VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET cooldown=?''', (guild_id, value, value))
+            await db.commit()
+
+    async def set_notify_channel(self, guild_id: str, channel_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''INSERT INTO config (guild_id, notify_channel) VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET notify_channel=?''', (guild_id, channel_id, channel_id))
+            await db.commit()
