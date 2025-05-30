@@ -120,7 +120,9 @@ class XPCog(commands.Cog):
         self.voice_tracking = {}
         self.voice_xp_task.start()
         self.levelup_roles = {5: 123456789012345678, 10: 234567890123456789}  # exemple: {niveau: role_id}
-        self.bot.loop.create_task(self.db.init())
+
+    async def cog_load(self):
+        await self.db.init()
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -390,4 +392,6 @@ class XPCog(commands.Cog):
             await interaction.response.send_message("Erreur lors de la récupération de l'historique.", ephemeral=True)
 
 async def setup(bot):
-    await bot.add_cog(XPCog(bot))
+    cog = XPCog(bot)
+    await cog.cog_load()
+    await bot.add_cog(cog)
