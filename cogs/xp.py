@@ -6,6 +6,9 @@ import os
 import time
 from typing import Dict, Optional, Union
 from PIL import Image, ImageDraw, ImageFont
+import aiosqlite
+
+from .xp_db import XPDatabase
 
 XP_FILE = 'xp_data.json'
 CONFIG_FILE = 'xp_config.json'
@@ -113,30 +116,24 @@ class ConfigStorage:
 class XPCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.storage = XPStorage()
-        self.config = ConfigStorage()
+        self.db = XPDatabase()
         self.voice_tracking = {}
         self.voice_xp_task.start()
-        self.cooldowns = {}  # anti-spam XP
         self.levelup_roles = {5: 123456789012345678, 10: 234567890123456789}  # exemple: {niveau: role_id}
+        self.bot.loop.create_task(self.db.init())
 
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or not message.guild:
             return
-        now = time.time()
         user_id = str(message.author.id)
         guild_id = str(message.guild.id)
-        cooldown = self.config.get_cooldown(guild_id)
-        if user_id in self.cooldowns and now - self.cooldowns[user_id] < cooldown:
-            return
-        self.cooldowns[user_id] = now
-        self.storage.add_message(user_id)
-        level_up = self.storage.add_xp(user_id, 5, "text")
+        await self.db.add_message(user_id, guild_id)
+        level_up = await self.db.add_xp(user_id, guild_id, 5, "text")
         if level_up:
-            notify_channel_id = self.config.get_notify_channel(guild_id)
+            notify_channel_id = await self.db.get_notify_channel(guild_id)
             channel = message.guild.get_channel(notify_channel_id) if notify_channel_id else message.channel
-            await channel.send(f"🎉 {message.author.mention} passe niveau {self.storage.get_level(user_id, 'text')} en texte !")
+            await channel.send(f"🎉 {message.author.mention} passe niveau {await self.db.get_level(user_id, guild_id, 'text')} en texte !")
             # Attribution de rôle si palier atteint
             if level_up in self.levelup_roles:
                 role = message.guild.get_role(self.levelup_roles[level_up])
@@ -149,15 +146,16 @@ class XPCog(commands.Cog):
         if member.bot:
             return
         if after.channel and not before.channel:
-            self.voice_tracking[member.id] = 0
+           
         elif before.channel and not after.channel:
             self.voice_tracking.pop(member.id, None)
 
     @tasks.loop(minutes=1)
     async def voice_xp_task(self):
         for user_id in list(self.voice_tracking.keys()):
-            self.storage.add_xp(str(user_id), 10, "voice")
-            self.storage.add_voice_time(str(user_id), 1)
+            guild_id = self.voice_tracking[user_id]
+            await self.db.add_xp(str(user_id), guild_id, 10, "voice")
+            await self.db.add_voice_time(str(user_id), guild_id, 1)
 
     @app_commands.command(name="level", description="Affiche votre niveau et XP.")
     async def level_slash(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
@@ -179,32 +177,33 @@ class XPCog(commands.Cog):
         if mode not in ("text", "voice", "messages", "voice_time"):
             await interaction.response.send_message("Mode invalide. Utilisez 'text', 'voice', 'messages' ou 'voice_time'.", ephemeral=True)
             return
-        leaderboard = self.storage.get_leaderboard(mode)[:10]
+        guild_id = str(interaction.guild.id)
+        leaderboard = await self.db.get_leaderboard(guild_id, mode)
         if mode == "messages":
             msg = f"Top 10 Messages :\n"
-            for i, (user_id, data) in enumerate(leaderboard, 1):
+            for i, (user_id, value) in enumerate(leaderboard, 1):
                 user = self.bot.get_user(int(user_id))
                 name = user.name if user else user_id
-                msg += f"{i}. {name}: {data.get('messages', 0)} messages\n"
+                msg += f"{i}. {name}: {value} messages\n"
         elif mode == "voice_time":
             msg = f"Top 10 Vocal (heures) :\n"
-            for i, (user_id, data) in enumerate(leaderboard, 1):
+            for i, (user_id, value) in enumerate(leaderboard, 1):
                 user = self.bot.get_user(int(user_id))
                 name = user.name if user else user_id
-                hours = round(data.get('voice_time', 0) / 60, 2)
+                hours = round(value / 60, 2)
                 msg += f"{i}. {name}: {hours} heures\n"
         elif mode == "text":
             msg = f"Top 10 XP Texte :\n"
-            for i, (user_id, data) in enumerate(leaderboard, 1):
+            for i, (user_id, value) in enumerate(leaderboard, 1):
                 user = self.bot.get_user(int(user_id))
                 name = user.name if user else user_id
-                msg += f"{i}. {name}: {data.get('text', 0)} XP\n"
+                msg += f"{i}. {name}: {value} XP\n"
         elif mode == "voice":
             msg = f"Top 10 XP Vocal :\n"
-            for i, (user_id, data) in enumerate(leaderboard, 1):
+            for i, (user_id, value) in enumerate(leaderboard, 1):
                 user = self.bot.get_user(int(user_id))
                 name = user.name if user else user_id
-                msg += f"{i}. {name}: {data.get('voice', 0)} XP\n"
+                msg += f"{i}. {name}: {value} XP\n"
         await interaction.response.send_message(msg)
 
     @app_commands.command(name="setcooldown", description="Configure le cooldown anti-spam XP (en secondes)")
@@ -254,7 +253,7 @@ class XPCog(commands.Cog):
     @app_commands.command(name="help", description="Affiche l'aide du bot.")
     async def help_slash(self, interaction: discord.Interaction):
         help_text = (
-            "**Commandes principales :**\n"
+            "**Commandes principales : **\n"
             "/level [membre] — Affiche le niveau et l'XP d'un membre.\n"
             "/scoreboard [text|voice|messages|voice_time] — Affiche le classement XP/messages/vocal.\n"
             "/profile [membre] — Affiche une image de profil XP.\n"
