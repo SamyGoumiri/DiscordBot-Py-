@@ -9,7 +9,7 @@ token = os.getenv('DISCORD_TOKEN')
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
-tree = app_commands.CommandTree(bot)
+tree = bot.tree
 
 @bot.event
 async def on_ready():
