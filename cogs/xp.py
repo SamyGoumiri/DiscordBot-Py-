@@ -202,5 +202,30 @@ class XPCog(commands.Cog):
             await interaction.response.send_message(file=file)
         os.remove(img_path)
 
+    @app_commands.command(name="help", description="Affiche l'aide du bot.")
+    async def help_slash(self, interaction: discord.Interaction):
+        help_text = (
+            "**Commandes principales :**\n"
+            "/level [membre] — Affiche le niveau et l'XP d'un membre.\n"
+            "/scoreboard [text|voice] — Affiche le classement XP.\n"
+            "/profile [membre] — Affiche une image de profil XP.\n"
+            "/xp — Informations sur le système d'XP.\n"
+            "/setcooldown <secondes> — Configure le cooldown anti-spam XP (admin).\n"
+            "/setnotif <salon> — Configure le salon de notification de level up (admin).\n"
+        )
+        await interaction.response.send_message(help_text, ephemeral=True)
+
+    @app_commands.command(name="xp", description="Informations sur le système d'XP.")
+    async def xpinfo_slash(self, interaction: discord.Interaction):
+        xp_text = (
+            "**Système d'XP et de niveaux :**\n"
+            "- Gagnez de l'XP texte en discutant sur le serveur.\n"
+            "- Gagnez de l'XP vocal en restant en vocal.\n"
+            "- Un cooldown anti-spam limite l'XP toutes les X secondes.\n"
+            "- Des rôles spéciaux sont attribués à certains niveaux.\n"
+            "- Utilisez /level, /scoreboard, /profile pour suivre votre progression !"
+        )
+        await interaction.response.send_message(xp_text, ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(XPCog(bot))
