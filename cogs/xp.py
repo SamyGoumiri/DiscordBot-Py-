@@ -116,7 +116,7 @@ class ConfigStorage:
 class XPCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.db = XPDatabase()
+        self.db = XPDatabase(bot)
         self.voice_tracking = {}
         self.voice_xp_task.start()
         self.levelup_roles = {5: 123456789012345678, 10: 234567890123456789}  # exemple: {niveau: role_id}

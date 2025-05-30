@@ -1,11 +1,13 @@
 import aiosqlite
 import asyncio
 from typing import Optional, List, Tuple
+from discord.ext import commands
 
 DB_PATH = 'xp_data.db'
 
-class XPDatabase:
-    def __init__(self, db_path=DB_PATH):
+class XPDatabase(commands.Cog):
+    def __init__(self, bot, db_path=DB_PATH):
+        self.bot = bot
         self.db_path = db_path
 
     async def init(self):
@@ -180,3 +182,6 @@ class XPDatabase:
                                           (user_id, guild_id, limit))
             rows = await cursor.fetchall()
             return [(row[0], row[1], row[2]) for row in rows] if rows else []
+
+async def setup(bot):
+    await bot.add_cog(XPDatabase(bot))
