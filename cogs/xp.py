@@ -130,6 +130,7 @@ class XPCog(commands.Cog):
         guild_id = str(message.guild.id)
         await self.db.add_message(user_id, guild_id)
         level_up = await self.db.add_xp(user_id, guild_id, 5, "text")
+        await self.db.log_xp_history(user_id, guild_id, "text", 5)
         if level_up:
             notify_channel_id = await self.db.get_notify_channel(guild_id)
             channel = message.guild.get_channel(notify_channel_id) if notify_channel_id else message.channel
@@ -146,7 +147,7 @@ class XPCog(commands.Cog):
         if member.bot:
             return
         if after.channel and not before.channel:
-           
+            self.voice_tracking[member.id] = str(member.guild.id)
         elif before.channel and not after.channel:
             self.voice_tracking.pop(member.id, None)
 
@@ -156,55 +157,148 @@ class XPCog(commands.Cog):
             guild_id = self.voice_tracking[user_id]
             await self.db.add_xp(str(user_id), guild_id, 10, "voice")
             await self.db.add_voice_time(str(user_id), guild_id, 1)
+            await self.db.log_xp_history(str(user_id), guild_id, "voice", 10)
+
+    @app_commands.command(name="notifyxp", description="Active ou désactive les notifications de level-up pour vous.")
+    async def notifyxp_slash(self, interaction: discord.Interaction, enabled: bool):
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            user_id = str(interaction.user.id)
+            guild_id = str(interaction.guild.id)
+            await self.db.set_notify_enabled(user_id, guild_id, enabled)
+            await interaction.response.send_message(f"Notifications de level-up {'activées' if enabled else 'désactivées'}.", ephemeral=True)
+        except Exception as e:
+            print(f"[notifyxp_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la modification de vos notifications.", ephemeral=True)
+
+    @app_commands.command(name="rank", description="Affiche votre rang dans le classement XP.")
+    async def rank_slash(self, interaction: discord.Interaction, mode: str = "text", member: Optional[discord.Member] = None):
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            resolved_member = member or interaction.guild.get_member(interaction.user.id)
+            if not resolved_member:
+                await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
+                return
+            guild_id = str(interaction.guild.id)
+            leaderboard = await self.db.get_leaderboard(guild_id, mode)
+            user_id = str(resolved_member.id)
+            rank = next((i+1 for i, (uid, _) in enumerate(leaderboard) if uid == user_id), None)
+            if rank:
+                await interaction.response.send_message(f"{resolved_member.display_name} est classé #{rank} en mode {mode}.")
+            else:
+                await interaction.response.send_message(f"{resolved_member.display_name} n'est pas classé dans le top {len(leaderboard)} en mode {mode}.")
+        except Exception as e:
+            print(f"[rank_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la récupération du rang.", ephemeral=True)
+
+    @app_commands.command(name="backupxp", description="Exporte la base de données XP.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def backupxp_slash(self, interaction: discord.Interaction):
+        try:
+            backup_path = f"xp_backup_{int(time.time())}.db"
+            await self.db.backup(backup_path)
+            if os.path.exists(backup_path):
+                with open(backup_path, 'rb') as f:
+                    file = discord.File(f, filename=backup_path)
+                    await interaction.response.send_message("Backup de la base de données XP :", file=file, ephemeral=True)
+                os.remove(backup_path)
+            else:
+                await interaction.response.send_message("Erreur lors de la création du backup.", ephemeral=True)
+        except Exception as e:
+            print(f"[backupxp_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de l'export de la base de données.", ephemeral=True)
 
     @app_commands.command(name="level", description="Affiche votre niveau et XP.")
     async def level_slash(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
-        if not interaction.guild:
-            await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
-            return
-        resolved_member = member or interaction.guild.get_member(interaction.user.id)
-        if not resolved_member:
-            await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
-            return
-        text_xp = self.storage.get_xp(str(resolved_member.id), "text")
-        voice_xp = self.storage.get_xp(str(resolved_member.id), "voice")
-        text_level = self.storage.get_level(str(resolved_member.id), "text")
-        voice_level = self.storage.get_level(str(resolved_member.id), "voice")
-        await interaction.response.send_message(f"{resolved_member.display_name} - Texte: {text_xp} XP (Niveau {text_level}) | Vocal: {voice_xp} XP (Niveau {voice_level})")
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            resolved_member = member or interaction.guild.get_member(interaction.user.id)
+            if not resolved_member:
+                await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
+                return
+            text_xp = await self.db.get_xp(str(resolved_member.id), str(interaction.guild.id), "text")
+            voice_xp = await self.db.get_xp(str(resolved_member.id), str(interaction.guild.id), "voice")
+            text_level = await self.db.get_level(str(resolved_member.id), str(interaction.guild.id), "text")
+            voice_level = await self.db.get_level(str(resolved_member.id), str(interaction.guild.id), "voice")
+            await interaction.response.send_message(f"{resolved_member.display_name} - Texte: {text_xp} XP (Niveau {text_level}) | Vocal: {voice_xp} XP (Niveau {voice_level})")
+        except Exception as e:
+            print(f"[level_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la récupération du niveau.", ephemeral=True)
+
+    @app_commands.command(name="profile", description="Affiche une image de votre profil XP")
+    async def profile_slash(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            resolved_member = member or interaction.guild.get_member(interaction.user.id)
+            if not resolved_member:
+                await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
+                return
+            text_xp = await self.db.get_xp(str(resolved_member.id), str(interaction.guild.id), "text")
+            text_level = await self.db.get_level(str(resolved_member.id), str(interaction.guild.id), "text")
+            img = Image.new('RGB', (400, 100), color=(73, 109, 137))
+            d = ImageDraw.Draw(img)
+            font = ImageFont.load_default()
+            d.text((10,10), f"{resolved_member.display_name}", font=font, fill=(255,255,0))
+            d.text((10,40), f"Niveau: {text_level}", font=font, fill=(255,255,255))
+            d.text((10,70), f"XP: {text_xp}", font=font, fill=(255,255,255))
+            img_path = f"profile_{resolved_member.id}.png"
+            img.save(img_path)
+            with open(img_path, 'rb') as f:
+                file = discord.File(f, filename=img_path)
+                await interaction.response.send_message(file=file)
+            os.remove(img_path)
+        except Exception as e:
+            print(f"[profile_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la génération du profil.", ephemeral=True)
 
     @app_commands.command(name="scoreboard", description="Affiche le classement XP/messages/vocal.")
     async def scoreboard_slash(self, interaction: discord.Interaction, mode: str = "text"):
-        if mode not in ("text", "voice", "messages", "voice_time"):
-            await interaction.response.send_message("Mode invalide. Utilisez 'text', 'voice', 'messages' ou 'voice_time'.", ephemeral=True)
-            return
-        guild_id = str(interaction.guild.id)
-        leaderboard = await self.db.get_leaderboard(guild_id, mode)
-        if mode == "messages":
-            msg = f"Top 10 Messages :\n"
-            for i, (user_id, value) in enumerate(leaderboard, 1):
-                user = self.bot.get_user(int(user_id))
-                name = user.name if user else user_id
-                msg += f"{i}. {name}: {value} messages\n"
-        elif mode == "voice_time":
-            msg = f"Top 10 Vocal (heures) :\n"
-            for i, (user_id, value) in enumerate(leaderboard, 1):
-                user = self.bot.get_user(int(user_id))
-                name = user.name if user else user_id
-                hours = round(value / 60, 2)
-                msg += f"{i}. {name}: {hours} heures\n"
-        elif mode == "text":
-            msg = f"Top 10 XP Texte :\n"
-            for i, (user_id, value) in enumerate(leaderboard, 1):
-                user = self.bot.get_user(int(user_id))
-                name = user.name if user else user_id
-                msg += f"{i}. {name}: {value} XP\n"
-        elif mode == "voice":
-            msg = f"Top 10 XP Vocal :\n"
-            for i, (user_id, value) in enumerate(leaderboard, 1):
-                user = self.bot.get_user(int(user_id))
-                name = user.name if user else user_id
-                msg += f"{i}. {name}: {value} XP\n"
-        await interaction.response.send_message(msg)
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            if mode not in ("text", "voice", "messages", "voice_time"):
+                await interaction.response.send_message("Mode invalide. Utilisez 'text', 'voice', 'messages' ou 'voice_time'.", ephemeral=True)
+                return
+            guild_id = str(interaction.guild.id)
+            leaderboard = await self.db.get_leaderboard(guild_id, mode)
+            if mode == "messages":
+                msg = f"Top 10 Messages :\n"
+                for i, (user_id, value) in enumerate(leaderboard, 1):
+                    user = self.bot.get_user(int(user_id))
+                    name = user.name if user else user_id
+                    msg += f"{i}. {name}: {value} messages\n"
+            elif mode == "voice_time":
+                msg = f"Top 10 Vocal (heures) :\n"
+                for i, (user_id, value) in enumerate(leaderboard, 1):
+                    user = self.bot.get_user(int(user_id))
+                    name = user.name if user else user_id
+                    hours = round(value / 60, 2)
+                    msg += f"{i}. {name}: {hours} heures\n"
+            elif mode == "text":
+                msg = f"Top 10 XP Texte :\n"
+                for i, (user_id, value) in enumerate(leaderboard, 1):
+                    user = self.bot.get_user(int(user_id))
+                    name = user.name if user else user_id
+                    msg += f"{i}. {name}: {value} XP\n"
+            elif mode == "voice":
+                msg = f"Top 10 XP Vocal :\n"
+                for i, (user_id, value) in enumerate(leaderboard, 1):
+                    user = self.bot.get_user(int(user_id))
+                    name = user.name if user else user_id
+                    msg += f"{i}. {name}: {value} XP\n"
+            await interaction.response.send_message(msg)
+        except Exception as e:
+            print(f"[scoreboard_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la récupération du classement.", ephemeral=True)
 
     @app_commands.command(name="setcooldown", description="Configure le cooldown anti-spam XP (en secondes)")
     @app_commands.checks.has_permissions(administrator=True)
@@ -213,7 +307,7 @@ class XPCog(commands.Cog):
             await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
             return
         guild_id = str(interaction.guild.id)
-        self.config.set_cooldown(guild_id, seconds)
+        await self.db.set_cooldown(guild_id, seconds)
         await interaction.response.send_message(f"Cooldown anti-spam XP défini à {seconds} secondes.")
 
     @app_commands.command(name="setnotif", description="Configure le salon de notification de level up")
@@ -223,32 +317,20 @@ class XPCog(commands.Cog):
             await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
             return
         guild_id = str(interaction.guild.id)
-        self.config.set_notify_channel(guild_id, channel.id)
+        await self.db.set_notify_channel(guild_id, channel.id)
         await interaction.response.send_message(f"Salon de notification défini sur {channel.mention}.")
 
-    @app_commands.command(name="profile", description="Affiche une image de votre profil XP")
-    async def profile_slash(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
-        if not interaction.guild:
-            await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
-            return
-        resolved_member = member or interaction.guild.get_member(interaction.user.id)
-        if not resolved_member:
-            await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
-            return
-        text_xp = self.storage.get_xp(str(resolved_member.id), "text")
-        text_level = self.storage.get_level(str(resolved_member.id), "text")
-        img = Image.new('RGB', (400, 100), color=(73, 109, 137))
-        d = ImageDraw.Draw(img)
-        font = ImageFont.load_default()
-        d.text((10,10), f"{resolved_member.display_name}", font=font, fill=(255,255,0))
-        d.text((10,40), f"Niveau: {text_level}", font=font, fill=(255,255,255))
-        d.text((10,70), f"XP: {text_xp}", font=font, fill=(255,255,255))
-        img_path = f"profile_{resolved_member.id}.png"
-        img.save(img_path)
-        with open(img_path, 'rb') as f:
-            file = discord.File(f, filename=img_path)
-            await interaction.response.send_message(file=file)
-        os.remove(img_path)
+    @app_commands.command(name="xp", description="Informations sur le système d'XP.")
+    async def xpinfo_slash(self, interaction: discord.Interaction):
+        xp_text = (
+            "**Système d'XP et de niveaux :**\n"
+            "- Gagnez de l'XP texte en discutant sur le serveur.\n"
+            "- Gagnez de l'XP vocal en restant en vocal.\n"
+            "- Un cooldown anti-spam limite l'XP toutes les X secondes.\n"
+            "- Des rôles spéciaux sont attribués à certains niveaux.\n"
+            "- Utilisez /level, /scoreboard, /profile pour suivre votre progression !"
+        )
+        await interaction.response.send_message(xp_text, ephemeral=True)
 
     @app_commands.command(name="help", description="Affiche l'aide du bot.")
     async def help_slash(self, interaction: discord.Interaction):
@@ -263,17 +345,49 @@ class XPCog(commands.Cog):
         )
         await interaction.response.send_message(help_text, ephemeral=True)
 
-    @app_commands.command(name="xp", description="Informations sur le système d'XP.")
-    async def xpinfo_slash(self, interaction: discord.Interaction):
-        xp_text = (
-            "**Système d'XP et de niveaux :**\n"
-            "- Gagnez de l'XP texte en discutant sur le serveur.\n"
-            "- Gagnez de l'XP vocal en restant en vocal.\n"
-            "- Un cooldown anti-spam limite l'XP toutes les X secondes.\n"
-            "- Des rôles spéciaux sont attribués à certains niveaux.\n"
-            "- Utilisez /level, /scoreboard, /profile pour suivre votre progression !"
-        )
-        await interaction.response.send_message(xp_text, ephemeral=True)
+    @app_commands.command(name="resetxp", description="Réinitialise l'XP d'un utilisateur (admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def resetxp_slash(self, interaction: discord.Interaction, member: discord.Member, confirmation: Optional[str] = None):
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            if confirmation != "oui":
+                await interaction.response.send_message(f"⚠️ Cette action va supprimer définitivement l'XP de {member.display_name}.\nPour confirmer, relancez la commande avec le paramètre confirmation=oui.", ephemeral=True)
+                return
+            user_id = str(member.id)
+            guild_id = str(interaction.guild.id)
+            await self.db.reset_user(user_id, guild_id)
+            await interaction.response.send_message(f"XP de {member.display_name} réinitialisé.", ephemeral=True)
+        except Exception as e:
+            print(f"[resetxp_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la réinitialisation de l'XP.", ephemeral=True)
+
+    @app_commands.command(name="xphistory", description="Affiche l'évolution de l'XP d'un utilisateur.")
+    async def xphistory_slash(self, interaction: discord.Interaction, member: Optional[discord.Member] = None, mode: Optional[str] = None):
+        try:
+            if not interaction.guild:
+                await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
+                return
+            resolved_member = member or interaction.guild.get_member(interaction.user.id)
+            if not resolved_member:
+                await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
+                return
+            user_id = str(resolved_member.id)
+            guild_id = str(interaction.guild.id)
+            history = await self.db.get_xp_history(user_id, guild_id, mode)
+            if not history:
+                await interaction.response.send_message("Aucun historique d'XP trouvé.", ephemeral=True)
+                return
+            msg = f"Historique XP de {resolved_member.display_name} :\n"
+            for amount, timestamp, mode_str in history:
+                from datetime import datetime
+                dt = datetime.fromtimestamp(timestamp)
+                msg += f"[{dt.strftime('%Y-%m-%d %H:%M')}] +{amount} XP ({mode_str})\n"
+            await interaction.response.send_message(msg, ephemeral=True)
+        except Exception as e:
+            print(f"[xphistory_slash] Erreur: {e}")
+            await interaction.response.send_message("Erreur lors de la récupération de l'historique.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(XPCog(bot))
