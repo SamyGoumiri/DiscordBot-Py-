@@ -166,12 +166,10 @@ class XPCog(commands.Cog):
         if not resolved_member:
             await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
             return
-        user_id = str(resolved_member.id)
-        guild_id = str(interaction.guild.id)
-        text_xp = await self.db.get_xp(user_id, guild_id, "text")
-        voice_xp = await self.db.get_xp(user_id, guild_id, "voice")
-        text_level = await self.db.get_level(user_id, guild_id, "text")
-        voice_level = await self.db.get_level(user_id, guild_id, "voice")
+        text_xp = self.storage.get_xp(str(resolved_member.id), "text")
+        voice_xp = self.storage.get_xp(str(resolved_member.id), "voice")
+        text_level = self.storage.get_level(str(resolved_member.id), "text")
+        voice_level = self.storage.get_level(str(resolved_member.id), "voice")
         await interaction.response.send_message(f"{resolved_member.display_name} - Texte: {text_xp} XP (Niveau {text_level}) | Vocal: {voice_xp} XP (Niveau {voice_level})")
 
     @app_commands.command(name="scoreboard", description="Affiche le classement XP/messages/vocal.")
@@ -215,7 +213,7 @@ class XPCog(commands.Cog):
             await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
             return
         guild_id = str(interaction.guild.id)
-        await self.db.set_cooldown(guild_id, seconds)
+        self.config.set_cooldown(guild_id, seconds)
         await interaction.response.send_message(f"Cooldown anti-spam XP défini à {seconds} secondes.")
 
     @app_commands.command(name="setnotif", description="Configure le salon de notification de level up")
@@ -225,7 +223,7 @@ class XPCog(commands.Cog):
             await interaction.response.send_message("Cette commande doit être utilisée dans un serveur.", ephemeral=True)
             return
         guild_id = str(interaction.guild.id)
-        await self.db.set_notify_channel(guild_id, channel.id)
+        self.config.set_notify_channel(guild_id, channel.id)
         await interaction.response.send_message(f"Salon de notification défini sur {channel.mention}.")
 
     @app_commands.command(name="profile", description="Affiche une image de votre profil XP")
@@ -237,34 +235,14 @@ class XPCog(commands.Cog):
         if not resolved_member:
             await interaction.response.send_message("Impossible de trouver le membre.", ephemeral=True)
             return
-        user_id = str(resolved_member.id)
-        guild_id = str(interaction.guild.id)
-        text_xp = await self.db.get_xp(user_id, guild_id, "text")
-        text_level = await self.db.get_level(user_id, guild_id, "text")
-        # Génération d'une image de profil avancée
-        avatar_url = resolved_member.display_avatar.url if hasattr(resolved_member, 'display_avatar') else None
-        img = Image.new('RGB', (500, 180), color=(40, 44, 52))
+        text_xp = self.storage.get_xp(str(resolved_member.id), "text")
+        text_level = self.storage.get_level(str(resolved_member.id), "text")
+        img = Image.new('RGB', (400, 100), color=(73, 109, 137))
         d = ImageDraw.Draw(img)
         font = ImageFont.load_default()
-        # Barre de progression
-        xp_for_next = 50 * (text_level ** 2)
-        xp_for_prev = 50 * ((text_level-1) ** 2) if text_level > 1 else 0
-        progress = (text_xp - xp_for_prev) / (xp_for_next - xp_for_prev) if xp_for_next > xp_for_prev else 1
-        d.rectangle([120, 120, 470, 150], fill=(60,60,60))
-        d.rectangle([120, 120, 120+int(350*progress), 150], fill=(0,200,0))
-        d.text((120, 155), f"XP: {text_xp}/{xp_for_next}", font=font, fill=(200,200,200))
-        d.text((120, 30), f"{resolved_member.display_name}", font=font, fill=(255,255,0))
-        d.text((120, 60), f"Niveau: {text_level}", font=font, fill=(255,255,255))
-        # Avatar
-        if avatar_url:
-            import requests
-            from io import BytesIO
-            response = requests.get(avatar_url)
-            avatar_img = Image.open(BytesIO(response.content)).resize((100,100))
-            img.paste(avatar_img, (10,30))
-        # Badge exemple
-        d.ellipse([450,30,490,70], fill=(255,215,0))
-        d.text((455,40), "★", font=font, fill=(0,0,0))
+        d.text((10,10), f"{resolved_member.display_name}", font=font, fill=(255,255,0))
+        d.text((10,40), f"Niveau: {text_level}", font=font, fill=(255,255,255))
+        d.text((10,70), f"XP: {text_xp}", font=font, fill=(255,255,255))
         img_path = f"profile_{resolved_member.id}.png"
         img.save(img_path)
         with open(img_path, 'rb') as f:
