@@ -9,7 +9,9 @@ token = os.getenv('DISCORD_TOKEN')
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
-intents.message_content = True  # Nécessaire pour lire les messages
+intents.message_content = True  # si tu lis le contenu des messages
+intents.members = True          # si tu veux voir les membres du serveur
+intents.presences = True        # si tu veux voir leur statut en ligne
 tree = bot.tree
 
 @bot.event
