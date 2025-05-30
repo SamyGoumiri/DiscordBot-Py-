@@ -27,7 +27,7 @@ class XPStorage:
 
     def add_xp(self, user_id: str, amount: int, mode: str) -> int:
         if user_id not in self.data:
-            self.data[user_id] = {"text": 0, "voice": 0, "level": 1, "last_xp": 0}
+            self.data[user_id] = {"text": 0, "voice": 0, "messages": 0, "voice_time": 0, "text_level": 1, "voice_level": 1}
         self.data[user_id][mode] += amount
         # Calcul du niveau (exponentiel)
         xp_total = self.data[user_id][mode]
@@ -42,14 +42,41 @@ class XPStorage:
         self.save()
         return 0  # Pas de level up
 
+    def add_message(self, user_id: str):
+        if user_id not in self.data:
+            self.data[user_id] = {"text": 0, "voice": 0, "messages": 0, "voice_time": 0, "text_level": 1, "voice_level": 1}
+        self.data[user_id]["messages"] = self.data[user_id].get("messages", 0) + 1
+        self.save()
+
+    def add_voice_time(self, user_id: str, minutes: int):
+        if user_id not in self.data:
+            self.data[user_id] = {"text": 0, "voice": 0, "messages": 0, "voice_time": 0, "text_level": 1, "voice_level": 1}
+        self.data[user_id]["voice_time"] = self.data[user_id].get("voice_time", 0) + minutes
+        self.save()
+
     def get_xp(self, user_id: str, mode: str) -> int:
         return self.data.get(user_id, {}).get(mode, 0)
 
     def get_level(self, user_id: str, mode: str) -> int:
         return self.data.get(user_id, {}).get(f"{mode}_level", 1)
 
+    def get_messages(self, user_id: str) -> int:
+        return self.data.get(user_id, {}).get("messages", 0)
+
+    def get_voice_time(self, user_id: str) -> int:
+        return self.data.get(user_id, {}).get("voice_time", 0)
+
     def get_leaderboard(self, mode: str):
-        return sorted(self.data.items(), key=lambda x: x[1].get(mode, 0), reverse=True)
+        if mode == "text":
+            return sorted(self.data.items(), key=lambda x: x[1].get("text", 0), reverse=True)
+        elif mode == "voice":
+            return sorted(self.data.items(), key=lambda x: x[1].get("voice", 0), reverse=True)
+        elif mode == "messages":
+            return sorted(self.data.items(), key=lambda x: x[1].get("messages", 0), reverse=True)
+        elif mode == "voice_time":
+            return sorted(self.data.items(), key=lambda x: x[1].get("voice_time", 0), reverse=True)
+        else:
+            return []
 
 class ConfigStorage:
     def __init__(self):
@@ -104,6 +131,7 @@ class XPCog(commands.Cog):
         if user_id in self.cooldowns and now - self.cooldowns[user_id] < cooldown:
             return
         self.cooldowns[user_id] = now
+        self.storage.add_message(user_id)
         level_up = self.storage.add_xp(user_id, 5, "text")
         if level_up:
             notify_channel_id = self.config.get_notify_channel(guild_id)
@@ -129,6 +157,7 @@ class XPCog(commands.Cog):
     async def voice_xp_task(self):
         for user_id in list(self.voice_tracking.keys()):
             self.storage.add_xp(str(user_id), 10, "voice")
+            self.storage.add_voice_time(str(user_id), 1)
 
     @app_commands.command(name="level", description="Affiche votre niveau et XP.")
     async def level_slash(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
@@ -145,17 +174,37 @@ class XPCog(commands.Cog):
         voice_level = self.storage.get_level(str(resolved_member.id), "voice")
         await interaction.response.send_message(f"{resolved_member.display_name} - Texte: {text_xp} XP (Niveau {text_level}) | Vocal: {voice_xp} XP (Niveau {voice_level})")
 
-    @app_commands.command(name="scoreboard", description="Affiche le classement XP.")
+    @app_commands.command(name="scoreboard", description="Affiche le classement XP/messages/vocal.")
     async def scoreboard_slash(self, interaction: discord.Interaction, mode: str = "text"):
-        if mode not in ("text", "voice"):
-            await interaction.response.send_message("Mode invalide. Utilisez 'text' ou 'voice'.", ephemeral=True)
+        if mode not in ("text", "voice", "messages", "voice_time"):
+            await interaction.response.send_message("Mode invalide. Utilisez 'text', 'voice', 'messages' ou 'voice_time'.", ephemeral=True)
             return
         leaderboard = self.storage.get_leaderboard(mode)[:10]
-        msg = f"Top 10 XP {mode}:\n"
-        for i, (user_id, data) in enumerate(leaderboard, 1):
-            user = self.bot.get_user(int(user_id))
-            name = user.name if user else user_id
-            msg += f"{i}. {name}: {data[mode]} XP\n"
+        if mode == "messages":
+            msg = f"Top 10 Messages :\n"
+            for i, (user_id, data) in enumerate(leaderboard, 1):
+                user = self.bot.get_user(int(user_id))
+                name = user.name if user else user_id
+                msg += f"{i}. {name}: {data.get('messages', 0)} messages\n"
+        elif mode == "voice_time":
+            msg = f"Top 10 Vocal (heures) :\n"
+            for i, (user_id, data) in enumerate(leaderboard, 1):
+                user = self.bot.get_user(int(user_id))
+                name = user.name if user else user_id
+                hours = round(data.get('voice_time', 0) / 60, 2)
+                msg += f"{i}. {name}: {hours} heures\n"
+        elif mode == "text":
+            msg = f"Top 10 XP Texte :\n"
+            for i, (user_id, data) in enumerate(leaderboard, 1):
+                user = self.bot.get_user(int(user_id))
+                name = user.name if user else user_id
+                msg += f"{i}. {name}: {data.get('text', 0)} XP\n"
+        elif mode == "voice":
+            msg = f"Top 10 XP Vocal :\n"
+            for i, (user_id, data) in enumerate(leaderboard, 1):
+                user = self.bot.get_user(int(user_id))
+                name = user.name if user else user_id
+                msg += f"{i}. {name}: {data.get('voice', 0)} XP\n"
         await interaction.response.send_message(msg)
 
     @app_commands.command(name="setcooldown", description="Configure le cooldown anti-spam XP (en secondes)")
@@ -207,7 +256,7 @@ class XPCog(commands.Cog):
         help_text = (
             "**Commandes principales :**\n"
             "/level [membre] — Affiche le niveau et l'XP d'un membre.\n"
-            "/scoreboard [text|voice] — Affiche le classement XP.\n"
+            "/scoreboard [text|voice|messages|voice_time] — Affiche le classement XP/messages/vocal.\n"
             "/profile [membre] — Affiche une image de profil XP.\n"
             "/xp — Informations sur le système d'XP.\n"
             "/setcooldown <secondes> — Configure le cooldown anti-spam XP (admin).\n"
